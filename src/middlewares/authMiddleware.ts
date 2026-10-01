@@ -22,3 +22,19 @@ export const verifyToken = (req: Request, res: Response, next: NextFunction): vo
         res.status(403).json({ success: false, message: 'Sesi tidak valid atau kedaluwarsa!' });
     }
 };
+
+export const requireKader = (req: Request, res: Response, next: NextFunction): void => {
+    if (res.locals.role !== 'kader') {
+        res.status(403).json({ success: false, message: 'Akses khusus kader Posyandu!' });
+        return;
+    }
+    next();
+};
+
+export const requireUser = (req: Request, res: Response, next: NextFunction): void => {
+    if (res.locals.role !== 'user') {
+        res.status(403).json({ success: false, message: 'Akses khusus pengguna!' });
+        return;
+    }
+    next();
+};
