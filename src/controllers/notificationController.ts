@@ -15,10 +15,15 @@ export const getMyNotifications = async (req: Request, res: Response): Promise<v
 
 export const markNotificationAsRead = async (req: Request, res: Response): Promise<void> => {
     const { id } = req.params;
+    const userId = res.locals.userId;
     try {
         const notif = await NotificationModel.getById(Number(id));
         if (!notif) {
             res.status(404).json({ success: false, message: 'Notifikasi tidak ditemukan!' });
+            return;
+        }
+        if (notif.user_id !== userId) {
+            res.status(403).json({ success: false, message: 'Anda hanya bisa mengubah notifikasi milik sendiri!' });
             return;
         }
         await NotificationModel.markAsRead(Number(id));
@@ -42,10 +47,15 @@ export const markAllNotificationsAsRead = async (req: Request, res: Response): P
 
 export const deleteNotification = async (req: Request, res: Response): Promise<void> => {
     const { id } = req.params;
+    const userId = res.locals.userId;
     try {
         const notif = await NotificationModel.getById(Number(id));
         if (!notif) {
             res.status(404).json({ success: false, message: 'Notifikasi tidak ditemukan!' });
+            return;
+        }
+        if (notif.user_id !== userId) {
+            res.status(403).json({ success: false, message: 'Anda hanya bisa menghapus notifikasi milik sendiri!' });
             return;
         }
         await NotificationModel.remove(Number(id));

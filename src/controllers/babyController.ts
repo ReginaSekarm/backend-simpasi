@@ -18,7 +18,7 @@ export const createBaby = async (req: Request, res: Response): Promise<void> => 
     const userId = res.locals.userId;
     const role = res.locals.role;
     const {
-        fullName, gender, birthDate, parentName, parentEmail,
+        fullName, gender, birthPlace, birthDate, parentName, parentEmail,
         weightKg, heightCm, headCircumferenceCm, lilaCm, conditionNote
     } = req.body;
 
@@ -26,7 +26,7 @@ export const createBaby = async (req: Request, res: Response): Promise<void> => 
         const newId = await BabyModel.create({
             userId: role === 'user' ? userId : null,   // kalau kader yang input, user_id null
             addedBy: userId,
-            fullName, gender, birthDate, parentName, parentEmail,
+            fullName, gender, birthPlace, birthDate, parentName, parentEmail,
             weightKg, heightCm, headCircumferenceCm, lilaCm, conditionNote
         });
         res.status(201).json({ success: true, message: 'Data anak berhasil ditambahkan!', data: { id: newId } });
@@ -40,7 +40,7 @@ export const createBaby = async (req: Request, res: Response): Promise<void> => 
 export const updateBaby = async (req: Request, res: Response): Promise<void> => {
     const { id } = req.params;
     const {
-        fullName, gender, birthDate,
+        fullName, gender, birthPlace, birthDate,
         weightKg, heightCm, headCircumferenceCm, lilaCm, conditionNote
     } = req.body;
 
@@ -52,7 +52,7 @@ export const updateBaby = async (req: Request, res: Response): Promise<void> => 
         }
 
         await BabyModel.update(Number(id), {
-            fullName, gender, birthDate, weightKg, heightCm, headCircumferenceCm, lilaCm, conditionNote
+            fullName, gender, birthPlace, birthDate, weightKg, heightCm, headCircumferenceCm, lilaCm, conditionNote
         });
         res.status(200).json({ success: true, message: 'Data anak berhasil diperbarui!' });
     } catch (error) {

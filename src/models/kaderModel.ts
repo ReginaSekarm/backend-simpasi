@@ -4,7 +4,7 @@ export const KaderModel = {
     getProfile: async (userId: number) => {
         const [rows]: any = await pool.query(
             `SELECT u.id, u.full_name, u.email, u.phone, u.nik, u.gender, u.birth_date,
-                    kp.posyandu_name, kp.position, kp.region, kp.joined_at
+                    kp.posyandu_name, kp.position, kp.region, kp.joined_at, kp.photo_url
              FROM users u
              LEFT JOIN kader_profiles kp ON kp.user_id = u.id
              WHERE u.id = ?`,
@@ -53,5 +53,16 @@ export const KaderModel = {
             'UPDATE kader_profiles SET posyandu_name = ?, position = ?, region = ? WHERE user_id = ?',
             [data.posyanduName, data.position, data.region, userId]
         );
+    },
+
+    // URL foto profil saat ini (null kalau belum ada)
+    getPhotoUrl: async (userId: number): Promise<string | null> => {
+        const [rows]: any = await pool.query('SELECT photo_url FROM kader_profiles WHERE user_id = ?', [userId]);
+        return rows.length ? rows[0].photo_url : null;
+    },
+
+    // simpan URL foto profil (null = hapus foto)
+    updatePhotoUrl: async (userId: number, photoUrl: string | null) => {
+        await pool.query('UPDATE kader_profiles SET photo_url = ? WHERE user_id = ?', [photoUrl, userId]);
     }
 };

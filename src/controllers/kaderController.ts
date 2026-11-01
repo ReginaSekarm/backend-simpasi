@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import bcrypt from 'bcrypt';
 import { KaderModel } from '../models/kaderModel.js';
 import { UserModel } from '../models/userModel.js';
+import { getBlobPhotoError, deleteBlobSafely } from '../services/blobService.js';
 
 // Lihat profil kader
 export const getKaderProfile = async (req: Request, res: Response): Promise<void> => {
@@ -15,23 +16,67 @@ export const getKaderProfile = async (req: Request, res: Response): Promise<void
     }
 };
 
-// Lengkapi / update profil kader (gabungan data users + kader_profiles)
+// Update profil kader.
+// Yang boleh diubah: nama, email, NIK, jenis kelamin, tanggal lahir, no WA, foto profil.
+// Nama Posyandu, jabatan, wilayah, dan tanggal bergabung dikunci (diisi saat akun dibuat).
+// photoUrl: URL hasil POST /api/uploads/profile-photo. Kirim null atau "" untuk menghapus foto.
 export const updateKaderProfile = async (req: Request, res: Response): Promise<void> => {
     const userId = res.locals.userId;
-    const { fullName, email, nik, gender, birthDate, phone, posyanduName, position, region } = req.body;
+    const { fullName, email, nik, gender, birthDate, phone, photoUrl } = req.body;
+
+    // foto profil: undefined = tidak diubah, null atau "" = hapus, selain itu = foto baru
+    const photoProvided = photoUrl !== undefined;
+    const newPhotoUrl: string | null = photoProvided && photoUrl ? String(photoUrl).trim() : null;
+
+    if (newPhotoUrl !== null) {
+        const photoError = getBlobPhotoError(newPhotoUrl, 'profiles');
+        if (photoError) {
+            res.status(400).json({ success: false, message: photoError });
+            return;
+        }
+    }
 
     try {
-        await KaderModel.updateUserInfo(userId, { fullName, email, nik, gender, birthDate, phone });
+        const current = await UserModel.findById(userId);
+        if (!current) {
+            res.status(404).json({ success: false, message: 'Akun tidak ditemukan!' });
+            return;
+        }
 
-        const alreadyHasProfile = await KaderModel.hasProfile(userId);
-        if (alreadyHasProfile) {
-            await KaderModel.updatePosyanduInfo(userId, { posyanduName, position, region });
-        } else {
-            await KaderModel.createProfile(userId, { posyanduName, position, region });
+        if (photoProvided && !(await KaderModel.hasProfile(userId))) {
+            res.status(404).json({
+                success: false,
+                message: 'Data profil kader (posyandu, jabatan, wilayah) belum ada, sehingga foto belum bisa disimpan!'
+            });
+            return;
+        }
+
+        // field yang tidak dikirim tetap memakai nilai lama
+        await KaderModel.updateUserInfo(userId, {
+            fullName: fullName ?? current.full_name,
+            email: email ?? current.email,
+            nik: nik ?? current.nik,
+            gender: gender ?? current.gender,
+            birthDate: birthDate ?? current.birth_date,
+            phone: phone ?? current.phone
+        });
+
+        if (photoProvided) {
+            const oldPhotoUrl = await KaderModel.getPhotoUrl(userId);
+            await KaderModel.updatePhotoUrl(userId, newPhotoUrl);
+
+            // foto lama dihapus dari Vercel Blob supaya storage tidak menumpuk
+            if (oldPhotoUrl && oldPhotoUrl !== newPhotoUrl) {
+                await deleteBlobSafely(oldPhotoUrl);
+            }
         }
 
         res.status(200).json({ success: true, message: 'Profil berhasil diperbarui!' });
-    } catch (error) {
+    } catch (error: any) {
+        if (error.code === 'ER_DUP_ENTRY') {
+            res.status(409).json({ success: false, message: 'Email atau NIK sudah digunakan akun lain!' });
+            return;
+        }
         console.error(error);
         res.status(500).json({ success: false, message: 'Gagal memperbarui profil.' });
     }

@@ -7,8 +7,32 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
+type OtpPurpose = 'register' | 'reset_password';
+
+const OTP_EXPIRE_MINUTES = 5;
+const RESEND_COOLDOWN_SECONDS = 60;
+
 const generateOtp = (): string => {
-    return Math.floor(100000 + Math.random() * 900000).toString();
+    return Math.floor(1000 + Math.random() * 9000).toString();
+};
+
+// Matikan kode lama, buat kode baru, lalu "kirim"
+const issueOtp = async (userId: number, email: string, purpose: OtpPurpose, tag: string): Promise<void> => {
+    await OtpModel.invalidateUnused(userId, purpose);
+    const otpCode = generateOtp();
+    const expiresAt = new Date(Date.now() + OTP_EXPIRE_MINUTES * 60 * 1000);
+    await OtpModel.create(userId, otpCode, purpose, expiresAt);
+
+    // TODO: kirim otpCode ke email pakai nodemailer.
+    // Untuk sekarang, ditampilkan di console supaya bisa dites tanpa setup email dulu.
+    console.log(`[${tag}] Email: ${email} | Kode: ${otpCode}`);
+};
+
+// Sisa detik yang harus ditunggu sebelum boleh minta kode baru (0 = boleh)
+const getRemainingCooldown = async (userId: number, purpose: OtpPurpose): Promise<number> => {
+    const secondsAgo = await OtpModel.getSecondsSinceLatest(userId, purpose);
+    if (secondsAgo === null) return 0;
+    return Math.max(0, RESEND_COOLDOWN_SECONDS - secondsAgo);
 };
 
 // REGISTER
@@ -17,6 +41,15 @@ export const register = async (req: Request, res: Response): Promise<void> => {
     try {
         const existingUser = await UserModel.findByEmail(email);
         if (existingUser) {
+            // akun sudah dibuat tapi belum verifikasi OTP -> arahkan ke kirim ulang OTP
+            if (!existingUser.is_verified) {
+                res.status(409).json({
+                    success: false,
+                    message: 'Email sudah terdaftar tetapi belum diverifikasi. Silakan kirim ulang kode OTP.',
+                    needsVerification: true
+                });
+                return;
+            }
             res.status(409).json({ success: false, message: 'Email sudah terdaftar!' });
             return;
         }
@@ -24,13 +57,7 @@ export const register = async (req: Request, res: Response): Promise<void> => {
         const hashedPassword = await bcrypt.hash(password, 10);
         const userId = await UserModel.create(fullName, email, phone, hashedPassword, 'user');
 
-        const otpCode = generateOtp();
-        const expiresAt = new Date(Date.now() + 5 * 60 * 1000); // berlaku 5 menit
-        await OtpModel.create(userId, otpCode, 'register', expiresAt);
-
-        // TODO: kirim otpCode ke email pakai nodemailer.
-        // Untuk sekarang, ditampilkan di console supaya bisa dites tanpa setup email dulu.
-        console.log(`[OTP REGISTER] Email: ${email} | Kode: ${otpCode}`);
+        await issueOtp(userId, email, 'register', 'OTP REGISTER');
 
         res.status(201).json({
             success: true,
@@ -45,7 +72,8 @@ export const register = async (req: Request, res: Response): Promise<void> => {
 
 // VERIFY OTP (registrasi)
 export const verifyRegisterOtp = async (req: Request, res: Response): Promise<void> => {
-    const { email, otpCode } = req.body;
+    const email = String(req.body.email ?? '').trim();
+    const { otpCode } = req.body;
     try {
         const user = await UserModel.findByEmail(email);
         if (!user) {
@@ -69,14 +97,56 @@ export const verifyRegisterOtp = async (req: Request, res: Response): Promise<vo
     }
 };
 
+// KIRIM ULANG OTP (registrasi atau lupa kata sandi)
+export const resendOtp = async (req: Request, res: Response): Promise<void> => {
+    const email = String(req.body.email ?? '').trim();
+    const purpose: OtpPurpose = req.body.purpose === 'reset_password' ? 'reset_password' : 'register';
+
+    try {
+        const user = await UserModel.findByEmail(email);
+        if (!user) {
+            res.status(404).json({ success: false, message: 'Email tidak terdaftar!' });
+            return;
+        }
+
+        if (purpose === 'register' && user.is_verified) {
+            res.status(400).json({ success: false, message: 'Akun sudah diverifikasi. Silakan login.' });
+            return;
+        }
+
+        const remaining = await getRemainingCooldown(user.id, purpose);
+        if (remaining > 0) {
+            res.status(429).json({
+                success: false,
+                message: `Tunggu ${remaining} detik sebelum meminta kode baru.`,
+                retryAfterSeconds: remaining
+            });
+            return;
+        }
+
+        await issueOtp(user.id, email, purpose, `OTP RESEND - ${purpose}`);
+
+        res.status(200).json({
+            success: true,
+            message: 'Kode OTP baru telah dikirim ke email Anda.',
+            retryAfterSeconds: RESEND_COOLDOWN_SECONDS
+        });
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ success: false, message: 'Error server.' });
+    }
+};
+
 // LOGIN
 export const login = async (req: Request, res: Response): Promise<void> => {
-    const { email, password } = req.body;
+    const email = String(req.body.email ?? '').trim();
+    const { password } = req.body;
     try {
         const user = await UserModel.findByEmail(email);
 
+        // email tidak ditemukan ATAU kata sandi salah -> pesan sengaja dibuat sama
         if (!user || !(await bcrypt.compare(password, user.password))) {
-            res.status(401).json({ success: false, message: 'Email atau kata sandi salah!' });
+            res.status(401).json({ success: false, message: 'Email atau Kata Sandi tidak cocok' });
             return;
         }
 
@@ -94,8 +164,7 @@ export const login = async (req: Request, res: Response): Promise<void> => {
         res.status(200).json({
             success: true,
             message: 'Login berhasil!',
-            token,
-            user: { id: user.id, fullName: user.full_name, email: user.email, role: user.role }
+            token
         });
     } catch (error) {
         console.error(error);
@@ -105,7 +174,7 @@ export const login = async (req: Request, res: Response): Promise<void> => {
 
 // FORGOT PASSWORD - kirim OTP
 export const forgotPassword = async (req: Request, res: Response): Promise<void> => {
-    const { email } = req.body;
+    const email = String(req.body.email ?? '').trim();
     try {
         const user = await UserModel.findByEmail(email);
         if (!user) {
@@ -113,13 +182,23 @@ export const forgotPassword = async (req: Request, res: Response): Promise<void>
             return;
         }
 
-        const otpCode = generateOtp();
-        const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
-        await OtpModel.create(user.id, otpCode, 'reset_password', expiresAt);
+        const remaining = await getRemainingCooldown(user.id, 'reset_password');
+        if (remaining > 0) {
+            res.status(429).json({
+                success: false,
+                message: `Tunggu ${remaining} detik sebelum meminta kode baru.`,
+                retryAfterSeconds: remaining
+            });
+            return;
+        }
 
-        console.log(`[OTP RESET PASSWORD] Email: ${email} | Kode: ${otpCode}`);
+        await issueOtp(user.id, email, 'reset_password', 'OTP RESET PASSWORD');
 
-        res.status(200).json({ success: true, message: 'Kode OTP telah dikirim ke email Anda.' });
+        res.status(200).json({
+            success: true,
+            message: 'Kode OTP telah dikirim ke email Anda.',
+            retryAfterSeconds: RESEND_COOLDOWN_SECONDS
+        });
     } catch (error) {
         console.error(error);
         res.status(500).json({ success: false, message: 'Error server.' });
@@ -128,7 +207,8 @@ export const forgotPassword = async (req: Request, res: Response): Promise<void>
 
 // RESET PASSWORD
 export const resetPassword = async (req: Request, res: Response): Promise<void> => {
-    const { email, otpCode, newPassword } = req.body;
+    const email = String(req.body.email ?? '').trim();
+    const { otpCode, newPassword } = req.body;
     try {
         const user = await UserModel.findByEmail(email);
         if (!user) {

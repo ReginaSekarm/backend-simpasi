@@ -30,6 +30,13 @@ export const NotificationModel = {
         return result.insertId;
     },
 
+    // kirim notifikasi yang sama ke banyak user sekaligus
+    createMany: async (userIds: number[], title: string, message: string, type?: string) => {
+        if (userIds.length === 0) return;
+        const values = userIds.map((id) => [id, title, message, type || null]);
+        await pool.query('INSERT INTO notifications (user_id, title, message, type) VALUES ?', [values]);
+    },
+
     markAsRead: async (id: number) => {
         await pool.query('UPDATE notifications SET is_read = TRUE WHERE id = ?', [id]);
     },
