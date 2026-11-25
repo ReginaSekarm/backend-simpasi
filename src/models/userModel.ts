@@ -25,5 +25,13 @@ export const UserModel = {
 
     updatePassword: async (id: number, hashedPassword: string) => {
         await pool.query('UPDATE users SET password = ? WHERE id = ?', [hashedPassword, id]);
+    },
+
+    // ubah nama lengkap, email, dan no HP
+    updateProfile: async (id: number, data: { fullName: string; email: string; phone: string }) => {
+        await pool.query(
+            'UPDATE users SET full_name = ?, email = ?, phone = ? WHERE id = ?',
+            [data.fullName, data.email, data.phone, id]
+        );
     }
 };

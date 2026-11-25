@@ -6,9 +6,22 @@ const DEFAULT_LIMIT = 10;
 const MAX_LIMIT = 30;
 const NO_ALLERGY_WORDS = ['tidak ada', 'tidak', '-', 'none', 'nihil'];
 
+const parseId = (rawId: string | string[] | undefined): number | null => {
+    if (typeof rawId !== 'string') {
+        return null;
+    }
+    const parsed = Number(rawId);
+    if (!Number.isInteger(parsed) || parsed <= 0) {
+        return null;
+    }
+    return parsed;
+};
+
 // umur dalam bulan penuh
 const getAgeInMonths = (birthDate: unknown): number => {
     const birth = new Date(birthDate as string);
+    if (Number.isNaN(birth.getTime())) return 0;
+
     const now = new Date();
     let months = (now.getFullYear() - birth.getFullYear()) * 12 + (now.getMonth() - birth.getMonth());
     if (now.getDate() < birth.getDate()) months -= 1;
@@ -34,7 +47,12 @@ const parseAllergies = (allergies: unknown): string[] => {
 
 // User: rekomendasi menu untuk anaknya (kader boleh melihat untuk semua balita)
 export const getMenuRecommendations = async (req: Request, res: Response): Promise<void> => {
-    const babyId = Number(req.params.babyId);
+    const babyId = parseId(req.params.babyId);
+    if (!babyId) {
+        res.status(400).json({ success: false, message: 'ID anak tidak valid!' });
+        return;
+    }
+
     const userId = res.locals.userId;
     const role = res.locals.role;
 
@@ -67,7 +85,7 @@ export const getMenuRecommendations = async (req: Request, res: Response): Promi
             ageCategory,
             condition,
             focus,
-            allergiesExcluded: allergens
+            allergiesExcluded: allergens,
         };
 
         if (ageCategory === null) {
@@ -75,16 +93,17 @@ export const getMenuRecommendations = async (req: Request, res: Response): Promi
                 success: true,
                 message: 'Anak belum memasuki usia MPASI (mulai 6 bulan).',
                 info,
-                data: []
+                data: [],
             });
             return;
         }
 
         const recipes = await RecommendationModel.getRecipesByAge(ageCategory, condition !== 'normal');
+        const recipeList = Array.isArray(recipes) ? recipes : [];
 
         // buang resep yang judul atau bahannya mengandung alergen
-        const safeRecipes = recipes.filter((recipe: any) => {
-            const text = `${recipe.title} ${recipe.ingredients}`.toLowerCase();
+        const safeRecipes = recipeList.filter((recipe: any) => {
+            const text = `${recipe.title ?? ''} ${recipe.ingredients ?? ''}`.toLowerCase();
             return !allergens.some((allergen) => text.includes(allergen));
         });
 
@@ -92,7 +111,7 @@ export const getMenuRecommendations = async (req: Request, res: Response): Promi
             success: true,
             message: safeRecipes.length === 0 ? 'Belum ada resep yang cocok untuk anak ini.' : 'Rekomendasi menu berhasil diambil.',
             info,
-            data: safeRecipes.slice(0, limit)
+            data: safeRecipes.slice(0, limit),
         });
     } catch (error) {
         console.error(error);

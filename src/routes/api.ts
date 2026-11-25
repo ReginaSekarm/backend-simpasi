@@ -7,11 +7,14 @@ import {
     getMyBabies, createBaby, updateBaby, deleteBaby, getAllBabiesForKader
 } from '../controllers/babyController.js';
 import {
-    getCheckupsByBaby, createCheckup, deleteCheckup, getKaderDashboardSummary, getKaderRecentActivity
+    getCheckupsByBaby, createCheckup, updateCheckup, deleteCheckup, getKaderDashboardSummary, getKaderRecentActivity
 } from '../controllers/checkupController.js';
 import {
     getKaderProfile, updateKaderProfile, changePassword
 } from '../controllers/kaderController.js';
+import {
+    getUserProfile, updateUserProfile, changeUserPassword
+} from '../controllers/userController.js';
 import {
     getPublishedRecipes, getRecipeDetail, getMyRecipes, createRecipe, updateRecipe, deleteRecipe
 } from '../controllers/recipeController.js';
@@ -25,13 +28,14 @@ import {
     getMyNotifications, markNotificationAsRead, markAllNotificationsAsRead, deleteNotification
 } from '../controllers/notificationController.js';
 import {
-    recommendMenu, getAiHistory, getAiHistoryDetail
+    recommendMenu, getAiHistory, getAiHistoryDetail, deleteAiHistory
 } from '../controllers/aiController.js';
 import { getMenuRecommendations } from '../controllers/recommendationController.js';
 import { uploadRecipePhoto, uploadProfilePhoto } from '../controllers/uploadController.js';
 import {
     validateRegister, validateLogin, validateOtp, validateResendOtp, validateForgotPassword, validateResetPassword,
-    validateBaby, validateCheckup, validateChangePassword, validateRecipe, validateComment, validateReply, validateAiRequest
+    validateBaby, validateCheckup, validateChangePassword, validateRecipe, validateComment, validateReply, validateAiRequest,
+    validateKaderProfile, validateUserProfile
 } from '../middlewares/validator.js';
 import { verifyToken, requireKader } from '../middlewares/authMiddleware.js';
 import { rejectRevokedToken } from '../middlewares/tokenBlacklist.js';
@@ -45,6 +49,15 @@ router.use(rejectRevokedToken);
 // Memaksa tujuan OTP = reset_password (dipakai route kirim ulang OTP lupa kata sandi)
 const asResetPasswordOtp = (req: Request, _res: Response, next: NextFunction): void => {
     req.body = { ...(req.body ?? {}), purpose: 'reset_password' };
+    next();
+};
+
+// Hanya akun user (orang tua); dipasang setelah verifyToken
+const requireUser = (_req: Request, res: Response, next: NextFunction): void => {
+    if (res.locals.role !== 'user') {
+        res.status(403).json({ success: false, message: 'Endpoint ini khusus akun pengguna!' });
+        return;
+    }
     next();
 };
 
@@ -69,6 +82,7 @@ router.get('/babies/:babyId/recommendations', verifyToken, getMenuRecommendation
 // CHECKUP ROUTES (Protected)
 router.get('/babies/:babyId/checkups', verifyToken, getCheckupsByBaby);
 router.post('/checkups', verifyToken, requireKader, validateCheckup, createCheckup);
+router.put('/checkups/:id', verifyToken, requireKader, validateCheckup, updateCheckup); // edit pemeriksaan (maks. 24 jam)
 router.delete('/checkups/:id', verifyToken, requireKader, deleteCheckup);
 
 // KADER DASHBOARD
@@ -77,9 +91,14 @@ router.get('/kader/dashboard/activity', verifyToken, requireKader, getKaderRecen
 
 // KADER PROFILE ROUTES
 router.get('/kader/profile', verifyToken, requireKader, getKaderProfile);
-router.put('/kader/profile', verifyToken, requireKader, updateKaderProfile);
+router.put('/kader/profile', verifyToken, requireKader, validateKaderProfile, updateKaderProfile);
 router.put('/kader/change-password', verifyToken, requireKader, validateChangePassword, changePassword);
 router.post('/uploads/profile-photo', verifyToken, requireKader, receiveRecipePhoto, uploadProfilePhoto); // unggah foto profil kader (Vercel Blob)
+
+// USER PROFILE ROUTES (orang tua)
+router.get('/user/profile', verifyToken, requireUser, getUserProfile);
+router.put('/user/profile', verifyToken, requireUser, validateUserProfile, updateUserProfile);        // ubah nama lengkap, email, no HP
+router.put('/user/change-password', verifyToken, requireUser, validateChangePassword, changeUserPassword); // kata sandi lama, baru, konfirmasi
 
 // RECIPE ROUTES
 router.get('/recipes', getPublishedRecipes);
@@ -95,8 +114,8 @@ router.get('/recipes/:recipeId/comments', getComments);
 router.get('/comments/:commentId/replies', getReplies);
 router.post('/recipes/:recipeId/comments', verifyToken, validateComment, createComment);
 router.post('/comments/:commentId/reply', verifyToken, validateReply, replyComment); // semua akun yang login bisa membalas
-router.put('/comments/:id', verifyToken, validateComment, updateComment);           // edit: user maks. 24 jam, kader tanpa batas
-router.delete('/comments/:id', verifyToken, deleteComment);                         // hapus: pemilik, tanpa batas waktu
+router.put('/comments/:id', verifyToken, validateComment, updateComment);          // edit: user maks. 24 jam, kader tanpa batas
+router.delete('/comments/:id', verifyToken, deleteComment);                        // hapus: pemilik, tanpa batas waktu
 
 // SAVED RECIPES (Koleksi Saya)
 router.get('/collection', verifyToken, getMyCollection);
@@ -113,5 +132,6 @@ router.delete('/notifications/:id', verifyToken, deleteNotification);
 router.post('/ai/recommend-menu', verifyToken, validateAiRequest, recommendMenu);
 router.get('/ai/history', verifyToken, getAiHistory);
 router.get('/ai/history/:id', verifyToken, getAiHistoryDetail);
+router.delete('/ai/history/:id', verifyToken, deleteAiHistory);
 
 export default router;

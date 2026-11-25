@@ -1,12 +1,26 @@
 import { Request, Response } from 'express';
 import { BabyModel } from '../models/babyModel.js';
 
+const parseId = (rawId: string | string[] | undefined): number | null => {
+    if (typeof rawId !== 'string') {
+        return null;
+    }
+    const parsed = Number(rawId);
+    if (!Number.isInteger(parsed) || parsed <= 0) {
+        return null;
+    }
+    return parsed;
+};
+
 // User: lihat semua anak miliknya
 export const getMyBabies = async (req: Request, res: Response): Promise<void> => {
     const userId = res.locals.userId;
     try {
         const babies = await BabyModel.getAllByUser(userId);
-        res.status(200).json({ success: true, data: babies });
+        res.status(200).json({
+            success: true,
+            data: Array.isArray(babies) ? babies : [],
+        });
     } catch (error) {
         console.error(error);
         res.status(500).json({ success: false, message: 'Gagal mengambil data anak.' });
@@ -29,7 +43,11 @@ export const createBaby = async (req: Request, res: Response): Promise<void> => 
             fullName, gender, birthPlace, birthDate, parentName, parentEmail,
             weightKg, heightCm, headCircumferenceCm, lilaCm, conditionNote
         });
-        res.status(201).json({ success: true, message: 'Data anak berhasil ditambahkan!', data: { id: newId } });
+        res.status(201).json({
+            success: true,
+            message: 'Data anak berhasil ditambahkan!',
+            data: { id: newId, babyId: newId },
+        });
     } catch (error) {
         console.error(error);
         res.status(500).json({ success: false, message: 'Gagal menambahkan data anak.' });
@@ -38,23 +56,33 @@ export const createBaby = async (req: Request, res: Response): Promise<void> => 
 
 // Edit data anak
 export const updateBaby = async (req: Request, res: Response): Promise<void> => {
-    const { id } = req.params;
+    const babyId = parseId(req.params.id);
+    if (!babyId) {
+        res.status(400).json({ success: false, message: 'ID anak tidak valid!' });
+        return;
+    }
+
     const {
         fullName, gender, birthPlace, birthDate,
         weightKg, heightCm, headCircumferenceCm, lilaCm, conditionNote
     } = req.body;
 
     try {
-        const baby = await BabyModel.getById(Number(id));
+        const baby = await BabyModel.getById(babyId);
         if (!baby) {
             res.status(404).json({ success: false, message: 'Data anak tidak ditemukan!' });
             return;
         }
 
-        await BabyModel.update(Number(id), {
-            fullName, gender, birthPlace, birthDate, weightKg, heightCm, headCircumferenceCm, lilaCm, conditionNote
+        await BabyModel.update(babyId, {
+            fullName, gender, birthPlace, birthDate,
+            weightKg, heightCm, headCircumferenceCm, lilaCm, conditionNote
         });
-        res.status(200).json({ success: true, message: 'Data anak berhasil diperbarui!' });
+        res.status(200).json({
+            success: true,
+            message: 'Data anak berhasil diperbarui!',
+            data: { id: babyId },
+        });
     } catch (error) {
         console.error(error);
         res.status(500).json({ success: false, message: 'Gagal memperbarui data anak.' });
@@ -63,16 +91,25 @@ export const updateBaby = async (req: Request, res: Response): Promise<void> => 
 
 // Hapus data anak
 export const deleteBaby = async (req: Request, res: Response): Promise<void> => {
-    const { id } = req.params;
+    const babyId = parseId(req.params.id);
+    if (!babyId) {
+        res.status(400).json({ success: false, message: 'ID anak tidak valid!' });
+        return;
+    }
+
     try {
-        const baby = await BabyModel.getById(Number(id));
+        const baby = await BabyModel.getById(babyId);
         if (!baby) {
             res.status(404).json({ success: false, message: 'Data anak tidak ditemukan!' });
             return;
         }
 
-        await BabyModel.remove(Number(id));
-        res.status(200).json({ success: true, message: 'Data anak berhasil dihapus!' });
+        await BabyModel.remove(babyId);
+        res.status(200).json({
+            success: true,
+            message: 'Data anak berhasil dihapus!',
+            data: { id: babyId },
+        });
     } catch (error) {
         console.error(error);
         res.status(500).json({ success: false, message: 'Gagal menghapus data anak.' });
@@ -81,10 +118,13 @@ export const deleteBaby = async (req: Request, res: Response): Promise<void> => 
 
 // Kader: lihat semua balita (dengan filter/pencarian nama)
 export const getAllBabiesForKader = async (req: Request, res: Response): Promise<void> => {
-    const search = req.query.search as string | undefined;
+    const search = typeof req.query.search === 'string' ? req.query.search : undefined;
     try {
         const babies = await BabyModel.getAllForKader(search);
-        res.status(200).json({ success: true, data: babies });
+        res.status(200).json({
+            success: true,
+            data: Array.isArray(babies) ? babies : [],
+        });
     } catch (error) {
         console.error(error);
         res.status(500).json({ success: false, message: 'Gagal mengambil data balita.' });

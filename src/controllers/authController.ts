@@ -3,6 +3,7 @@ import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
 import { UserModel } from '../models/userModel.js';
 import { OtpModel } from '../models/otpModel.js';
+import { sendOtpEmail } from '../services/emailService.js';
 import dotenv from 'dotenv';
 
 dotenv.config();
@@ -16,16 +17,14 @@ const generateOtp = (): string => {
     return Math.floor(1000 + Math.random() * 9000).toString();
 };
 
-// Matikan kode lama, buat kode baru, lalu "kirim"
-const issueOtp = async (userId: number, email: string, purpose: OtpPurpose, tag: string): Promise<void> => {
+// Matikan kode lama, buat kode baru, lalu kirim ke email user
+const issueOtp = async (userId: number, email: string, purpose: OtpPurpose): Promise<void> => {
     await OtpModel.invalidateUnused(userId, purpose);
     const otpCode = generateOtp();
     const expiresAt = new Date(Date.now() + OTP_EXPIRE_MINUTES * 60 * 1000);
     await OtpModel.create(userId, otpCode, purpose, expiresAt);
 
-    // TODO: kirim otpCode ke email pakai nodemailer.
-    // Untuk sekarang, ditampilkan di console supaya bisa dites tanpa setup email dulu.
-    console.log(`[${tag}] Email: ${email} | Kode: ${otpCode}`);
+    await sendOtpEmail(email, otpCode, purpose, OTP_EXPIRE_MINUTES);
 };
 
 // Sisa detik yang harus ditunggu sebelum boleh minta kode baru (0 = boleh)
@@ -41,7 +40,6 @@ export const register = async (req: Request, res: Response): Promise<void> => {
     try {
         const existingUser = await UserModel.findByEmail(email);
         if (existingUser) {
-            // akun sudah dibuat tapi belum verifikasi OTP -> arahkan ke kirim ulang OTP
             if (!existingUser.is_verified) {
                 res.status(409).json({
                     success: false,
@@ -57,7 +55,7 @@ export const register = async (req: Request, res: Response): Promise<void> => {
         const hashedPassword = await bcrypt.hash(password, 10);
         const userId = await UserModel.create(fullName, email, phone, hashedPassword, 'user');
 
-        await issueOtp(userId, email, 'register', 'OTP REGISTER');
+        await issueOtp(userId, email, 'register');
 
         res.status(201).json({
             success: true,
@@ -124,7 +122,7 @@ export const resendOtp = async (req: Request, res: Response): Promise<void> => {
             return;
         }
 
-        await issueOtp(user.id, email, purpose, `OTP RESEND - ${purpose}`);
+        await issueOtp(user.id, email, purpose);
 
         res.status(200).json({
             success: true,
@@ -139,12 +137,12 @@ export const resendOtp = async (req: Request, res: Response): Promise<void> => {
 
 // LOGIN
 export const login = async (req: Request, res: Response): Promise<void> => {
+    console.log('LOGIN MASUK:', JSON.stringify(req.body?.email), 'panjang sandi:', String(req.body?.password ?? '').length);
     const email = String(req.body.email ?? '').trim();
     const { password } = req.body;
     try {
         const user = await UserModel.findByEmail(email);
 
-        // email tidak ditemukan ATAU kata sandi salah -> pesan sengaja dibuat sama
         if (!user || !(await bcrypt.compare(password, user.password))) {
             res.status(401).json({ success: false, message: 'Email atau Kata Sandi tidak cocok' });
             return;
@@ -163,8 +161,9 @@ export const login = async (req: Request, res: Response): Promise<void> => {
 
         res.status(200).json({
             success: true,
-            message: 'Login berhasil!',
-            token
+            message: 'Login berhasil',
+            token,
+            role: user.role
         });
     } catch (error) {
         console.error(error);
@@ -192,7 +191,7 @@ export const forgotPassword = async (req: Request, res: Response): Promise<void>
             return;
         }
 
-        await issueOtp(user.id, email, 'reset_password', 'OTP RESET PASSWORD');
+        await issueOtp(user.id, email, 'reset_password');
 
         res.status(200).json({
             success: true,

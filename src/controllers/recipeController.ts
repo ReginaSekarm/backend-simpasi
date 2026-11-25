@@ -4,6 +4,76 @@ import { notifyAllUsersNewRecipe } from '../services/notificationService.js';
 
 const AGE_CATEGORIES = ['6', '7-8', '9-11', '12+'];
 
+// Helper validasi angka nutrisi
+const validateNutritionFields = (nutrition: {
+    proteinG?: unknown;
+    carbsG?: unknown;
+    fatG?: unknown;
+    calories?: unknown;
+}): string | null => {
+    const fields = [
+        { label: 'Protein (g)', value: nutrition.proteinG },
+        { label: 'Karbohidrat (g)', value: nutrition.carbsG },
+        { label: 'Lemak (g)', value: nutrition.fatG },
+        { label: 'Kalori (kkal)', value: nutrition.calories }
+    ];
+
+    for (const field of fields) {
+        if (field.value === undefined || field.value === null || String(field.value).trim() === '') {
+            continue;
+        }
+
+        if (typeof field.value === 'boolean' || typeof field.value === 'object') {
+            return 'Detail nutrisi harus berupa angka (contoh: 12 atau 12.5).';
+        }
+
+        const normalized = String(field.value).trim().replace(',', '.');
+        const num = Number(normalized);
+        if (!Number.isFinite(num) || num < 0) {
+            return 'Detail nutrisi harus berupa angka (contoh: 12 atau 12.5).';
+        }
+    }
+
+    return null;
+};
+
+const parseNutritionValue = (value: unknown): number => {
+    if (value === undefined || value === null || String(value).trim() === '') {
+        return 0;
+    }
+    return Number(String(value).trim().replace(',', '.'));
+};
+
+// Helper cek duplikasi nama resep atau URL foto menu
+const checkDuplicateRecipe = async (
+    kaderId: number,
+    title: string,
+    photoUrl?: string,
+    excludeId?: number
+): Promise<string | null> => {
+    const existingRecipes = (await RecipeModel.getAllByKader(kaderId)) as any[];
+    const normalizedTitle = String(title ?? '').trim().toLowerCase();
+    const normalizedPhoto = String(photoUrl ?? '').trim();
+
+    for (const item of existingRecipes) {
+        if (excludeId !== undefined && Number(item.id) === Number(excludeId)) {
+            continue;
+        }
+
+        const itemTitle = String(item.title ?? '').trim().toLowerCase();
+        if (normalizedTitle !== '' && itemTitle === normalizedTitle) {
+            return 'Nama resep sudah pernah digunakan. Gunakan nama resep yang lain.';
+        }
+
+        const itemPhoto = String(item.photo_url ?? item.image_url ?? '').trim();
+        if (normalizedPhoto !== '' && itemPhoto !== '' && itemPhoto === normalizedPhoto) {
+            return 'Foto menu sudah pernah digunakan pada resep lain. Gunakan foto yang berbeda.';
+        }
+    }
+
+    return null;
+};
+
 // User: lihat resep yang terpublikasi, dengan filter usia, bahan makanan, dan pencarian nama
 export const getPublishedRecipes = async (req: Request, res: Response): Promise<void> => {
     const ageCategory = String(req.query.ageCategory ?? '').trim();
@@ -86,7 +156,7 @@ export const getMyRecipes = async (req: Request, res: Response): Promise<void> =
     }
 };
 
-// Kader: tambah resep baru
+// Kader: tambah resep baru (draft boleh belum lengkap, bahan dan langkah yang kosong disimpan sebagai teks kosong)
 export const createRecipe = async (req: Request, res: Response): Promise<void> => {
     const kaderId = res.locals.userId;
     const {
@@ -94,10 +164,33 @@ export const createRecipe = async (req: Request, res: Response): Promise<void> =
         proteinG, carbsG, fatG, calories, tips, storageTips, status
     } = req.body;
 
+    const nutritionError = validateNutritionFields({ proteinG, carbsG, fatG, calories });
+    if (nutritionError) {
+        res.status(400).json({ success: false, message: nutritionError });
+        return;
+    }
+
     try {
+        const duplicateError = await checkDuplicateRecipe(kaderId, title, photoUrl);
+        if (duplicateError) {
+            res.status(400).json({ success: false, message: duplicateError });
+            return;
+        }
+
         const newId = await RecipeModel.create({
-            createdBy: kaderId, title, photoUrl, ageCategory, ingredients, steps,
-            proteinG, carbsG, fatG, calories, tips, storageTips, status
+            createdBy: kaderId,
+            title,
+            photoUrl,
+            ageCategory,
+            ingredients: ingredients ?? '',
+            steps: steps ?? '',
+            proteinG: parseNutritionValue(proteinG),
+            carbsG: parseNutritionValue(carbsG),
+            fatG: parseNutritionValue(fatG),
+            calories: parseNutritionValue(calories),
+            tips,
+            storageTips,
+            status
         });
 
         // resep langsung terpublikasi -> beri tahu semua user
@@ -119,10 +212,17 @@ export const createRecipe = async (req: Request, res: Response): Promise<void> =
 // Kader: edit resep (hanya resep miliknya sendiri)
 export const updateRecipe = async (req: Request, res: Response): Promise<void> => {
     const { id } = req.params;
+    const kaderId = res.locals.userId;
     const {
         title, photoUrl, ageCategory, ingredients, steps,
         proteinG, carbsG, fatG, calories, tips, storageTips, status
     } = req.body;
+
+    const nutritionError = validateNutritionFields({ proteinG, carbsG, fatG, calories });
+    if (nutritionError) {
+        res.status(400).json({ success: false, message: nutritionError });
+        return;
+    }
 
     try {
         const recipe = await RecipeModel.getById(Number(id));
@@ -130,14 +230,30 @@ export const updateRecipe = async (req: Request, res: Response): Promise<void> =
             res.status(404).json({ success: false, message: 'Resep tidak ditemukan!' });
             return;
         }
-        if (recipe.created_by !== res.locals.userId) {
+        if (recipe.created_by !== kaderId) {
             res.status(403).json({ success: false, message: 'Anda hanya bisa mengubah resep milik sendiri!' });
             return;
         }
 
+        const duplicateError = await checkDuplicateRecipe(kaderId, title, photoUrl, Number(id));
+        if (duplicateError) {
+            res.status(400).json({ success: false, message: duplicateError });
+            return;
+        }
+
         await RecipeModel.update(Number(id), {
-            title, photoUrl, ageCategory, ingredients, steps,
-            proteinG, carbsG, fatG, calories, tips, storageTips, status
+            title,
+            photoUrl,
+            ageCategory,
+            ingredients: ingredients ?? '',
+            steps: steps ?? '',
+            proteinG: parseNutritionValue(proteinG),
+            carbsG: parseNutritionValue(carbsG),
+            fatG: parseNutritionValue(fatG),
+            calories: parseNutritionValue(calories),
+            tips,
+            storageTips,
+            status
         });
 
         // baru dipublikasikan (sebelumnya draft) -> beri tahu semua user

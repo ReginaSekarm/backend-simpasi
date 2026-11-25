@@ -12,6 +12,7 @@ const PASSWORD_MESSAGE = 'Kata sandi minimal 8 karakter, mengandung 1 huruf besa
 // ---------- Aturan balita ----------
 const MAX_BABY_NAME_LENGTH = 100;
 const MAX_BIRTH_PLACE_LENGTH = 100;
+const MAX_ALLERGIES_LENGTH = 255;
 const BABY_CONDITIONS = ['normal', 'berisiko', 'stunting'];
 
 // batas angka yang masuk akal untuk balita (ubah kalau perlu)
@@ -21,8 +22,9 @@ const HEIGHT_LIMIT: MeasureLimit = { min: 30, max: 130, label: 'Tinggi badan (cm
 const HEAD_LIMIT: MeasureLimit = { min: 20, max: 60, label: 'Lingkar kepala (cm)' };
 const LILA_LIMIT: MeasureLimit = { min: 5, max: 30, label: 'LiLA (cm)' };
 
-// ---------- Aturan resep ----------
-const AGE_CATEGORIES = ['6', '7-8', '9-11', '12+'];
+// ---------- Aturan kader ----------
+const MAX_KADER_NAME_LENGTH = 100;
+const KADER_NIK_LENGTH = 16;
 
 const isValidEmail = (value: unknown): boolean =>
     typeof value === 'string' && EMAIL_REGEX.test(value.trim());
@@ -30,15 +32,17 @@ const isValidEmail = (value: unknown): boolean =>
 const isValidPassword = (value: unknown): boolean =>
     typeof value === 'string' && PASSWORD_REGEX.test(value);
 
-// cek angka tidak kosong, bukan huruf, dan tidak minus
-const isValidNumber = (value: unknown): boolean => {
-    if (value === undefined || value === null || String(value).trim() === '') return false;
-    const num = Number(value);
-    return !isNaN(num) && num >= 0;
-};
+// true kalau nilainya ada isinya (bukan undefined, null, atau teks kosong)
+const isFilled = (value: unknown): boolean =>
+    value !== undefined && value !== null && String(value).trim() !== '';
 
-// ubah "6,4" atau "6.4" jadi angka 6.4, null kalau bukan angka
+// ubah "6,4" atau "6.4" jadi angka 6.4, null kalau bukan angka valid atau minus
 const parseDecimal = (value: unknown): number | null => {
+    if (typeof value === 'boolean' || typeof value === 'object') return null;
+    if (typeof value === 'number') {
+        return Number.isFinite(value) && value >= 0 ? value : null;
+    }
+
     const text = String(value ?? '').trim().split(',').join('.');
     if (text === '' || text === '.') return null;
 
@@ -52,7 +56,36 @@ const parseDecimal = (value: unknown): number | null => {
     }
     if (dotCount > 1) return null;
 
-    return Number(text);
+    const num = Number(text);
+    return Number.isFinite(num) && num >= 0 ? num : null;
+};
+
+// cek angka tidak kosong, bukan huruf, dan tidak minus
+const isValidNumber = (value: unknown): boolean => {
+    if (!isFilled(value)) return false;
+    return parseDecimal(value) !== null;
+};
+
+// semua nilai harus angka valid; kalau required = false, nilai yang kosong boleh dilewati
+const areNumbersValid = (values: unknown[], required: boolean): boolean =>
+    values.every((value) => (isFilled(value) ? isValidNumber(value) : !required));
+
+// "6 Bulan", "7 - 8 Bulan", "9-11", "12 Bulan +" -> "6" | "7-8" | "9-11" | "12+" (null kalau tidak dikenali)
+const normalizeAgeCategory = (value: unknown): string | null => {
+    const first = parseInt(String(value ?? '').trim(), 10);
+    if (first === 6) return '6';
+    if (first === 7) return '7-8';
+    if (first === 9) return '9-11';
+    if (first === 12) return '12+';
+    return null;
+};
+
+// normalisasi gender ke 'L' atau 'P' (null kalau tidak dikenali)
+const normalizeBabyGender = (value: unknown): 'L' | 'P' | null => {
+    const raw = String(value ?? '').trim().toLowerCase();
+    if (raw === 'l' || raw === 'laki-laki' || raw === 'laki laki' || raw === 'male') return 'L';
+    if (raw === 'p' || raw === 'perempuan' || raw === 'female') return 'P';
+    return null;
 };
 
 // cek angka ukuran tubuh ada di dalam batas
@@ -233,10 +266,10 @@ export const validateResetPassword = (req: Request, res: Response, next: NextFun
 export const validateBaby = (req: Request, res: Response, next: NextFunction): void => {
     const {
         fullName, gender, birthPlace, birthDate,
-        weightKg, heightCm, headCircumferenceCm, lilaCm, conditionNote
+        weightKg, heightCm, headCircumferenceCm, lilaCm, conditionNote, allergies
     } = req.body;
 
-    // LiLA dan kondisi balita boleh kosong
+    // LiLA, kondisi balita, dan alergi boleh kosong
     if (!fullName || !gender || !birthPlace || !birthDate || !weightKg || !heightCm || !headCircumferenceCm) {
         res.status(400).json({ success: false, message: 'Nama, jenis kelamin, tempat, tanggal lahir, BB, TB, dan lingkar kepala wajib diisi!' });
         return;
@@ -254,7 +287,8 @@ export const validateBaby = (req: Request, res: Response, next: NextFunction): v
     }
 
     // Jenis kelamin
-    if (gender !== 'L' && gender !== 'P') {
+    const normalizedGender = normalizeBabyGender(gender);
+    if (!normalizedGender) {
         errors.gender = 'Jenis kelamin harus L atau P!';
     }
 
@@ -307,6 +341,19 @@ export const validateBaby = (req: Request, res: Response, next: NextFunction): v
         }
     }
 
+    // Alergi (opsional)
+    let cleanAllergies: string | null = null;
+    if (allergies !== undefined && allergies !== null) {
+        const rawAllergies = Array.isArray(allergies)
+            ? allergies.map((item) => String(item).trim()).filter(Boolean).join(', ')
+            : String(allergies).trim();
+        if (rawAllergies.length > MAX_ALLERGIES_LENGTH) {
+            errors.allergies = `Alergi maksimal ${MAX_ALLERGIES_LENGTH} karakter!`;
+        } else if (rawAllergies !== '') {
+            cleanAllergies = rawAllergies;
+        }
+    }
+
     if (Object.keys(errors).length > 0) {
         res.status(400).json({
             success: false,
@@ -318,12 +365,14 @@ export const validateBaby = (req: Request, res: Response, next: NextFunction): v
 
     // simpan versi yang sudah dibersihkan
     req.body.fullName = cleanName;
+    if (normalizedGender) req.body.gender = normalizedGender;
     req.body.birthPlace = cleanBirthPlace;
     req.body.weightKg = weight.number;
     req.body.heightCm = height.number;
     req.body.headCircumferenceCm = head.number;
     req.body.lilaCm = lila;
     req.body.conditionNote = cleanCondition;
+    req.body.allergies = cleanAllergies;
     next();
 };
 
@@ -357,36 +406,63 @@ export const validateChangePassword = (req: Request, res: Response, next: NextFu
     next();
 };
 
+// Resep: draft boleh belum lengkap (hanya nama yang wajib), resep terpublikasi harus lengkap.
+// Kolom yang diisi tetap diperiksa, baik untuk draft maupun terpublikasi.
 export const validateRecipe = (req: Request, res: Response, next: NextFunction): void => {
     const { title, photoUrl, ageCategory, ingredients, steps, proteinG, carbsG, fatG, calories, status } = req.body;
 
-    if (!title || !photoUrl || !ageCategory || !ingredients || !steps || !status) {
-        res.status(400).json({ success: false, message: 'Foto, nama resep, usia, bahan, langkah, dan status wajib diisi!' });
-        return;
-    }
-
-    // foto harus hasil unggahan lewat POST /api/uploads/recipe-photo (Vercel Blob, folder recipes/)
-    const imageError = getBlobPhotoError(photoUrl, 'recipes');
-    if (imageError) {
-        res.status(400).json({ success: false, message: imageError });
-        return;
-    }
-    if (!AGE_CATEGORIES.includes(String(ageCategory))) {
-        res.status(400).json({ success: false, message: 'Usia harus 6, 7-8, 9-11, atau 12+ bulan!' });
-        return;
-    }
-    if (!isValidNumber(proteinG) || !isValidNumber(carbsG) || !isValidNumber(fatG)) {
-        res.status(400).json({ success: false, message: 'Protein, karbohidrat, dan lemak wajib diisi dengan angka!' });
-        return;
-    }
-    if (!isValidNumber(calories)) {
-        res.status(400).json({ success: false, message: 'Estimasi kalori wajib diisi dengan angka!' });
-        return;
-    }
     if (!['draft', 'terpublikasi'].includes(status)) {
         res.status(400).json({ success: false, message: 'Status harus draft atau terpublikasi!' });
         return;
     }
+    const isDraft = status === 'draft';
+
+    // nama wajib untuk draft maupun terpublikasi
+    if (!isFilled(title)) {
+        res.status(400).json({ success: false, message: 'Nama resep wajib diisi!' });
+        return;
+    }
+
+    // resep yang dipublikasikan harus lengkap
+    if (!isDraft && (!isFilled(photoUrl) || !isFilled(ageCategory) || !isFilled(ingredients) || !isFilled(steps))) {
+        res.status(400).json({ success: false, message: 'Foto, usia, bahan, dan langkah wajib diisi untuk mempublikasikan resep!' });
+        return;
+    }
+
+    // foto (kalau diisi) harus hasil unggahan lewat POST /api/uploads/recipe-photo (Vercel Blob, folder recipes/).
+    // URL pratinjau browser (blob:) ditolak karena tidak bisa dibuka lagi setelah halaman ditutup.
+    if (isFilled(photoUrl)) {
+        const imageError = getBlobPhotoError(photoUrl, 'recipes');
+        if (imageError) {
+            res.status(400).json({ success: false, message: imageError });
+            return;
+        }
+    }
+
+    // usia (kalau diisi): terima "6 Bulan", "7 - 8 Bulan", dst., lalu simpan sebagai "6", "7-8", "9-11", "12+"
+    if (isFilled(ageCategory)) {
+        const normalizedAge = normalizeAgeCategory(ageCategory);
+        if (normalizedAge === null) {
+            res.status(400).json({ success: false, message: 'Usia harus 6, 7-8, 9-11, atau 12+ bulan!' });
+            return;
+        }
+        req.body.ageCategory = normalizedAge;
+    }
+
+    if (!areNumbersValid([proteinG, carbsG, fatG], !isDraft)) {
+        res.status(400).json({ success: false, message: 'Protein, karbohidrat, dan lemak wajib diisi dengan angka!' });
+        return;
+    }
+    if (!areNumbersValid([calories], !isDraft)) {
+        res.status(400).json({ success: false, message: 'Estimasi kalori wajib diisi dengan angka!' });
+        return;
+    }
+
+    req.body.proteinG = isFilled(proteinG) ? parseDecimal(proteinG) : 0;
+    req.body.carbsG = isFilled(carbsG) ? parseDecimal(carbsG) : 0;
+    req.body.fatG = isFilled(fatG) ? parseDecimal(fatG) : 0;
+    req.body.calories = isFilled(calories) ? parseDecimal(calories) : 0;
+    req.body.title = String(title).trim();
     next();
 };
 
@@ -418,5 +494,158 @@ export const validateAiRequest = (req: Request, res: Response, next: NextFunctio
         res.status(400).json({ success: false, message: 'Data balita dan bahan di rumah wajib diisi!' });
         return;
     }
+    next();
+};
+
+// Profil kader: semua field boleh tidak dikirim (artinya tidak diubah),
+// tapi kalau dikirim tidak boleh kosong dan harus valid.
+export const validateKaderProfile = (req: Request, res: Response, next: NextFunction): void => {
+    const { fullName, email, nik, gender, birthDate, phone, photoUrl } = req.body;
+    const errors: Record<string, string> = {};
+
+    // Nama
+    let cleanName: string | undefined;
+    if (fullName !== undefined) {
+        cleanName = String(fullName).trim();
+        if (cleanName === '') {
+            errors.fullName = 'Nama lengkap tidak boleh kosong!';
+        } else if (cleanName.length > MAX_KADER_NAME_LENGTH) {
+            errors.fullName = `Nama lengkap maksimal ${MAX_KADER_NAME_LENGTH} karakter!`;
+        }
+    }
+
+    // Email
+    let cleanEmail: string | undefined;
+    if (email !== undefined) {
+        cleanEmail = String(email).trim();
+        if (!isValidEmail(cleanEmail)) {
+            errors.email = 'Format email tidak valid!';
+        }
+    }
+
+    // NIK: 16 digit angka
+    let cleanNik: string | undefined;
+    if (nik !== undefined) {
+        cleanNik = String(nik).trim();
+        if (!/^\d{16}$/.test(cleanNik)) {
+            errors.nik = `NIK harus berupa ${KADER_NIK_LENGTH} digit angka!`;
+        }
+    }
+
+    // Jenis kelamin: L atau P
+    if (gender !== undefined && gender !== 'L' && gender !== 'P') {
+        errors.gender = 'Jenis kelamin harus bernilai L atau P!';
+    }
+
+    // Tanggal lahir: YYYY-MM-DD dan tidak boleh di masa depan
+    if (birthDate !== undefined) {
+        const parsedBirthDate = parseDateOnly(birthDate);
+        const endOfToday = new Date();
+        endOfToday.setHours(23, 59, 59, 999);
+        if (parsedBirthDate === null) {
+            errors.birthDate = 'Format tanggal lahir harus YYYY-MM-DD, misalnya 1989-03-12!';
+        } else if (parsedBirthDate.getTime() > endOfToday.getTime()) {
+            errors.birthDate = 'Tanggal lahir tidak boleh di masa depan!';
+        }
+    }
+
+    // Nomor HP / WhatsApp: angka saja, 10-15 digit (spasi dan strip dibuang)
+    let cleanPhone: string | undefined;
+    if (phone !== undefined) {
+        cleanPhone = String(phone).replace(/[\s-]/g, '');
+        const phoneDigits = cleanPhone.replace('+', '');
+        if (!/^\+?\d+$/.test(cleanPhone)) {
+            errors.phone = 'Nomor HP hanya boleh berisi angka!';
+        } else if (phoneDigits.length < MIN_PHONE_DIGITS || phoneDigits.length > MAX_PHONE_DIGITS) {
+            errors.phone = `Nomor HP harus terdiri dari ${MIN_PHONE_DIGITS} hingga ${MAX_PHONE_DIGITS} digit!`;
+        }
+    }
+
+    // Foto profil: kosong atau null berarti hapus foto (ditangani controller),
+    // kalau diisi harus hasil unggahan lewat POST /api/uploads/profile-photo
+    if (isFilled(photoUrl)) {
+        const imageError = getBlobPhotoError(String(photoUrl), 'profiles');
+        if (imageError) {
+            errors.photoUrl = imageError;
+        }
+    }
+
+    if (Object.keys(errors).length > 0) {
+        res.status(400).json({
+            success: false,
+            message: Object.values(errors)[0],
+            errors
+        });
+        return;
+    }
+
+    // simpan versi yang sudah dibersihkan
+    if (cleanName !== undefined) req.body.fullName = cleanName;
+    if (cleanEmail !== undefined) req.body.email = cleanEmail;
+    if (cleanNik !== undefined) req.body.nik = cleanNik;
+    if (cleanPhone !== undefined) req.body.phone = cleanPhone;
+    next();
+};
+
+// ---------- Profil user (orang tua) ----------
+const MAX_USER_NAME_LENGTH = 100;
+
+// Semua field boleh tidak dikirim (artinya tidak diubah), tapi kalau dikirim harus valid.
+// Kata sandi tidak diubah lewat sini (pakai validateChangePassword).
+export const validateUserProfile = (req: Request, res: Response, next: NextFunction): void => {
+    const { fullName, email, phone } = req.body;
+    const errors: Record<string, string> = {};
+
+    if (!isFilled(fullName) && !isFilled(email) && !isFilled(phone) &&
+        fullName === undefined && email === undefined && phone === undefined) {
+        res.status(400).json({ success: false, message: 'Tidak ada data yang diubah!' });
+        return;
+    }
+
+    // Nama lengkap
+    let cleanName: string | undefined;
+    if (fullName !== undefined) {
+        cleanName = String(fullName).trim();
+        if (cleanName === '') {
+            errors.fullName = 'Nama lengkap tidak boleh kosong!';
+        } else if (cleanName.length > MAX_USER_NAME_LENGTH) {
+            errors.fullName = `Nama lengkap maksimal ${MAX_USER_NAME_LENGTH} karakter!`;
+        }
+    }
+
+    // Email
+    let cleanEmail: string | undefined;
+    if (email !== undefined) {
+        cleanEmail = String(email).trim();
+        if (!isValidEmail(cleanEmail)) {
+            errors.email = 'Format email tidak valid!';
+        }
+    }
+
+    // No HP: angka saja (boleh diawali +), 10-15 digit; spasi dan strip dibuang
+    let cleanPhone: string | undefined;
+    if (phone !== undefined) {
+        cleanPhone = String(phone).replace(/[\s-]/g, '');
+        const phoneDigits = cleanPhone.replace('+', '');
+        if (!/^\+?\d+$/.test(cleanPhone)) {
+            errors.phone = 'Nomor HP hanya boleh berisi angka!';
+        } else if (phoneDigits.length < MIN_PHONE_DIGITS || phoneDigits.length > MAX_PHONE_DIGITS) {
+            errors.phone = `Nomor HP harus terdiri dari ${MIN_PHONE_DIGITS} hingga ${MAX_PHONE_DIGITS} digit!`;
+        }
+    }
+
+    if (Object.keys(errors).length > 0) {
+        res.status(400).json({
+            success: false,
+            message: Object.values(errors)[0],
+            errors
+        });
+        return;
+    }
+
+    // simpan versi yang sudah dibersihkan
+    if (cleanName !== undefined) req.body.fullName = cleanName;
+    if (cleanEmail !== undefined) req.body.email = cleanEmail;
+    if (cleanPhone !== undefined) req.body.phone = cleanPhone;
     next();
 };
